@@ -11,7 +11,7 @@ from PyQt5 import QtCore, QtGui, QtWidgets
 class Ui_MainWindow(object):
     def setupUi(self, MainWindow):
         MainWindow.setObjectName("MainWindow")
-        MainWindow.resize(253, 311)
+        MainWindow.resize(270, 400)
         icon = QtGui.QIcon()
         icon.addPixmap(QtGui.QPixmap(":/1/icons/notification.png"), QtGui.QIcon.Normal, QtGui.QIcon.Off)
         MainWindow.setWindowIcon(icon)
@@ -31,7 +31,7 @@ class Ui_MainWindow(object):
         self.verticalLayout.addWidget(self.statusMessage)
         MainWindow.setCentralWidget(self.centralWidget)
         self.menuBar = QtWidgets.QMenuBar(MainWindow)
-        self.menuBar.setGeometry(QtCore.QRect(0, 0, 253, 23))
+        self.menuBar.setGeometry(QtCore.QRect(0, 0, 270, 23))
         self.menuBar.setObjectName("menuBar")
         self.menu = QtWidgets.QMenu(self.menuBar)
         self.menu.setObjectName("menu")
@@ -63,6 +63,8 @@ class Ui_MainWindow(object):
         self.viewTempLogAction.setObjectName("viewTempLogAction")
         self.createNewLogAction = QtWidgets.QAction(MainWindow)
         self.createNewLogAction.setObjectName("createNewLogAction")
+        self.programInfoAction = QtWidgets.QAction(MainWindow)
+        self.programInfoAction.setObjectName("programInfoAction")
         self.menu_3.addAction(self.sendCommand3)
         self.menu_3.addAction(self.sendCommand5)
         self.menu.addAction(self.restartComAction)
@@ -75,6 +77,7 @@ class Ui_MainWindow(object):
         self.menu_2.addAction(self.settingsAction)
         self.menu_2.addAction(self.createNewLogAction)
         self.menu_2.addAction(self.clearLogAction)
+        self.menu_2.addAction(self.programInfoAction)
         self.menuBar.addAction(self.menu.menuAction())
         self.menuBar.addAction(self.menu_2.menuAction())
 
@@ -99,6 +102,7 @@ class Ui_MainWindow(object):
         self.sendCommand5.setText(_translate("MainWindow", "5"))
         self.viewTempLogAction.setText(_translate("MainWindow", "Просмотреть лог температуры"))
         self.createNewLogAction.setText(_translate("MainWindow", "Начать новый лог"))
+        self.programInfoAction.setText(_translate("MainWindow", "О программе"))
 
 import ui.icons_rc
 

@@ -6,8 +6,8 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>253</width>
-    <height>311</height>
+    <width>270</width>
+    <height>400</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -42,7 +42,7 @@
     <rect>
      <x>0</x>
      <y>0</y>
-     <width>253</width>
+     <width>270</width>
      <height>23</height>
     </rect>
    </property>
@@ -72,6 +72,7 @@
     <addaction name="settingsAction"/>
     <addaction name="createNewLogAction"/>
     <addaction name="clearLogAction"/>
+    <addaction name="programInfoAction"/>
    </widget>
    <addaction name="menu"/>
    <addaction name="menu_2"/>
@@ -132,6 +133,11 @@
   <action name="createNewLogAction">
    <property name="text">
     <string>Начать новый лог</string>
+   </property>
+  </action>
+  <action name="programInfoAction">
+   <property name="text">
+    <string>О программе</string>
    </property>
   </action>
  </widget>

@@ -399,4 +399,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         filename = "log-" + date + ".txt"
         with open(filename, 'w') as newlog: newlog.write(logcontent)
         with open('log.txt', 'w') as log: log.write('')
-        
+    
+    @pyqtSlot()
+    def on_programInfoAction_triggered(self):
+        acq = QMessageBox.information(self, 'О программе', 'Версия 1.01 (15.12.2017)', QMessageBox.Ok | QMessageBox.NoButton | QMessageBox.NoButton, QMessageBox.Ok)
