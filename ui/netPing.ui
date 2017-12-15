@@ -70,9 +70,8 @@
      <string>Дополнительно</string>
     </property>
     <addaction name="settingsAction"/>
+    <addaction name="createNewLogAction"/>
     <addaction name="clearLogAction"/>
-    <addaction name="separator"/>
-    <addaction name="viewTempLogAction"/>
    </widget>
    <addaction name="menu"/>
    <addaction name="menu_2"/>
@@ -112,7 +111,7 @@
   </action>
   <action name="clearLogAction">
    <property name="text">
-    <string>Очистить лог</string>
+    <string>Очистить текущий лог</string>
    </property>
   </action>
   <action name="sendCommand3">
@@ -128,6 +127,11 @@
   <action name="viewTempLogAction">
    <property name="text">
     <string>Просмотреть лог температуры</string>
+   </property>
+  </action>
+  <action name="createNewLogAction">
+   <property name="text">
+    <string>Начать новый лог</string>
    </property>
   </action>
  </widget>

@@ -2,7 +2,7 @@
 
 # Form implementation generated from reading ui file '/home/es89/Dropbox/Projects/Python/NetPing/ui/netPing.ui'
 #
-# Created by: PyQt5 UI code generator 5.5.1
+# Created by: PyQt5 UI code generator 5.9.2
 #
 # WARNING! All changes made in this file will be lost!
 
@@ -61,6 +61,8 @@ class Ui_MainWindow(object):
         self.sendCommand5.setObjectName("sendCommand5")
         self.viewTempLogAction = QtWidgets.QAction(MainWindow)
         self.viewTempLogAction.setObjectName("viewTempLogAction")
+        self.createNewLogAction = QtWidgets.QAction(MainWindow)
+        self.createNewLogAction.setObjectName("createNewLogAction")
         self.menu_3.addAction(self.sendCommand3)
         self.menu_3.addAction(self.sendCommand5)
         self.menu.addAction(self.restartComAction)
@@ -71,9 +73,8 @@ class Ui_MainWindow(object):
         self.menu.addAction(self.enableCommandsAction)
         self.menu.addAction(self.menu_3.menuAction())
         self.menu_2.addAction(self.settingsAction)
+        self.menu_2.addAction(self.createNewLogAction)
         self.menu_2.addAction(self.clearLogAction)
-        self.menu_2.addSeparator()
-        self.menu_2.addAction(self.viewTempLogAction)
         self.menuBar.addAction(self.menu.menuAction())
         self.menuBar.addAction(self.menu_2.menuAction())
 
@@ -93,10 +94,11 @@ class Ui_MainWindow(object):
         self.restartAllAction.setText(_translate("MainWindow", "Полный перезапуск комплекса (4)"))
         self.disableCommandsAction.setText(_translate("MainWindow", "Отключить приём команд (6)"))
         self.enableCommandsAction.setText(_translate("MainWindow", "Включить приём команд (7)"))
-        self.clearLogAction.setText(_translate("MainWindow", "Очистить лог"))
+        self.clearLogAction.setText(_translate("MainWindow", "Очистить текущий лог"))
         self.sendCommand3.setText(_translate("MainWindow", "3"))
         self.sendCommand5.setText(_translate("MainWindow", "5"))
         self.viewTempLogAction.setText(_translate("MainWindow", "Просмотреть лог температуры"))
+        self.createNewLogAction.setText(_translate("MainWindow", "Начать новый лог"))
 
 import ui.icons_rc
 

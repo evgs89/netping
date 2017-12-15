@@ -9,7 +9,7 @@ from PyQt5.QtWidgets import QMainWindow, QMessageBox, QLabel
 from PyQt5.QtGui import QTextCursor
 from PyQt5.Qt import QObject
 from time import sleep
-import serial, configparser, os, threading
+import serial, configparser, os, threading, csv
 from datetime import datetime
 
 from .Ui_netPing import Ui_MainWindow
@@ -120,18 +120,16 @@ class MainWindow(QMainWindow, Ui_MainWindow):
     def __init__(self, parent=None):
         super(MainWindow, self).__init__(parent)
         self.setupUi(self)
+        self.log = ""
         self.watchdogEnabled = True
         self.readConfig()
-        if self.config['logsettings']['flags'][1] == '1':
-            try: 
-                tmp = open('tmp', 'r')
-                self.logWrite((tmp.read() + ' Неожиданное выкл-е'), 1)
-                tmp.close()
-            except: pass
-            self.t1 = threading.Thread(target = self.watchdog, args = ())
-            self.t1.daemon = True
-            self.t1.start()
-        self.logWrite((datetime.now().strftime('%H:%M:%S %d/%m') + ' Запуск'), 0)
+        try: 
+            with open('tmp') as tmp: self.logWrite('Неожиданное выкл-е', 1, tmp.read())
+        except: pass
+        self.t1 = threading.Thread(target = self.watchdog, args = ())
+        self.t1.daemon = True
+        self.t1.start()
+        self.logWrite('Запуск', 0)
     
 
     def readConfig(self):
@@ -168,6 +166,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             configfile = open('settings.ini', 'w')
             self.config.write(configfile)
             configfile.close()
+        self.logRead() # читаем лог соответственно настройкам отображения
         self.needToRebootModem1 = False
         self.needToRebootModem2 = False
         self.needToRebootModem3 = False
@@ -229,6 +228,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         else: 
             try: self.p2.stop()
             except: pass
+        
 
         
     def ipStateChanged(self, ip, state):
@@ -247,34 +247,41 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                     if state: self.needToRebootModem2 = False
         except: pass
         if self.config.getboolean('comtest', 'enabled') == True: self.c.needToRebootModem = bool(self.needToRebootModem1 + self.needToRebootModem2 + self.needToRebootModem3)
-        dt = datetime.now().strftime('%H:%M:%S %d/%m')
         if state: text = ip + ' доступен'
         else: text = ip + ' недоступен'
         label.setText(text)
-        text = dt + ' ' + text
         self.logWrite(text, logcat)
     
-    def logWrite(self, text, category):
+    def logWrite(self, text, category, time = None):
         self.statusMessage.setText(text)
-        if category == 5 and self.config['logsettings']['flags'][5] == '0':
-            try: log = open('templog.txt', 'x')
-            except: log = open('templog.txt', 'a')
-        else:
-            try: log = open('log.txt', 'x')
-            except: log = open('log.txt', 'a')
-        if self.config['logsettings']['flags'][category] == '1' or category == 5: log.write(text + '\n')
-        log.close()
-        log = open('log.txt', 'r')
-        self.textEdit.setPlainText(log.read())
+        if time == None: dt = datetime.now().strftime('%H:%M:%S %d/%m/%y')
+        else: dt = time
+        with open('log.txt',  'a', newline='') as logfile:
+            logwriter = csv.writer(logfile, dialect='unix')
+            logwriter.writerow([category, dt, text])
+            if self.config['logsettings']['flags'][category] == '1': 
+                self.log += (dt + ' ' + text + '\n')
+                self.textEdit.setPlainText(self.log)
         self.cur = self.textEdit.textCursor()
         self.cur.movePosition(QTextCursor.End)
         self.textEdit.setTextCursor(self.cur)
-        log.close()
+    
+    def logRead(self):
+        with open('log.txt', newline = '') as logfile:
+            self.log = ""
+            logreader = csv.reader(logfile, dialect = "unix")
+            for row in logreader:
+                if self.config['logsettings']['flags'][int(row[0])] == '1':
+                    self.log += (row[1] + ' ' + row[2] + '\n')
+            self.textEdit.setPlainText(self.log)
+            self.cur = self.textEdit.textCursor()
+            self.cur.movePosition(QTextCursor.End)
+            self.textEdit.setTextCursor(self.cur)
         
     def watchdog(self):
         while self.watchdogEnabled:
             tmpfile = open('tmp', 'w')
-            tmpfile.write(datetime.now().strftime('%H:%M %d/%m'))
+            tmpfile.write(datetime.now().strftime('%H:%M:%S %d/%m/%y'))
             tmpfile.close()
             self.statusMessage.setText(datetime.now().strftime('%H:%M %d/%m') + ' контроль активен')
             try: 
@@ -288,14 +295,14 @@ class MainWindow(QMainWindow, Ui_MainWindow):
     def tempChanged(self, temp):
         self.comState.setText(self.c.com + ' активен, t = ' + temp)
         self.statusMessage.setText(datetime.now().strftime('%H:%M:%S %d/%m') + ' t = ' + temp)
-        self.logWrite((datetime.now().strftime('%H:%M:%S %d/%m') + ' t = ' + temp), 5)
+        self.logWrite(('t = ' + temp), 5)
         if int(temp[1:]) >= int(self.config['comtest']['maxtemp']): 
-            self.logWrite((datetime.now().strftime('%H:%M:%S %d/%m') + ' ПРЕВЫШЕНИЕ КРИТ. ТЕМПЕРАТУРЫ'), 4)
+            self.logWrite('ПРЕВЫШЕНИЕ КРИТ. ТЕМПЕРАТУРЫ', 4)
             self.c.sendCommand('4')
         
     def comStateSlot(self, state):
-        if state: self.logWrite((datetime.now().strftime('%H:%M:%S %d/%m') + ' ' + self.c.com + ' активен'), 4)
-        else: self.logWrite((datetime.now().strftime('%H:%M:%S %d/%m') + ' ' + self.c.com + ' неактивен'), 4)
+        if state: self.logWrite((self.c.com + ' активен'), 4)
+        else: self.logWrite((self.c.com + ' неактивен'), 4)
 
     @pyqtSlot()
     def closeEvent(self, event):
@@ -308,7 +315,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         except: pass
         try: self.c.stop()
         except: pass
-        self.logWrite((datetime.now().strftime('%H:%M:%S %d/%m') + ' Выключение'), 1)
+        self.logWrite('Выключение', 1)
         event.accept()
     
     @pyqtSlot()
@@ -343,7 +350,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         if acq == QMessageBox.Yes:
             try: 
                 self.c.sendCommand('4')
-                self.logWrite((datetime.now().strftime('%H:%M:%S %d/%m') + ' Перезапуск комплекса'), 4)
+                self.logWrite('Перезапуск комплекса', 4)
             except: pass
             
     @pyqtSlot()
@@ -356,10 +363,10 @@ class MainWindow(QMainWindow, Ui_MainWindow):
     
     @pyqtSlot()
     def on_clearLogAction_triggered(self):
-        self.textEdit.setPlainText('')
-        log = open('log.txt', 'w')
-        log.write('')
-        log.close()
+        acq = QMessageBox.question(self, 'Запрос', 'Лог будет очищен. Вы уверены?', QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if acq == QMessageBox.Yes:
+            self.textEdit.setPlainText('')
+            with open('log.txt', 'w') as log: log.write('')
     
     @pyqtSlot()
     def on_sendCommand3_triggered(self):
@@ -375,24 +382,21 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             self.needToRebootModem3 = True
             try: self.c.needToRebootModem = True
             except: pass
-            self.logWrite((datetime.now().strftime('%H:%M:%S %d/%m') + ' Задан перезапуск модема'), 4)
+            self.logWrite('Задан перезапуск модема', 4)
         if self.config.getboolean('comtest', 'enabled') and not p0: 
             self.needToRebootModem3 = False
             try: self.c.needToRebootModem = False
             except: pass
-            self.logWrite((datetime.now().strftime('%H:%M:%S %d/%m') + ' Отменён перезапуск модема'), 4)
+            self.logWrite('Отменён перезапуск модема', 4)
     
     @pyqtSlot()
-    def on_viewTempLogAction_triggered(self):
-        filename = 'templog.txt'
-        self.logViewer = tempLogView(self)
-        self.logViewer.filename = filename
-        text = ''
-        try: 
-            log = open(filename,  'r')
-            text = log.read()
-            log.close()
-        except: text = ''
-        if text == '': text = 'Log is empty'
-        self.logViewer.log.setPlainText(text)
-        self.logViewer.show()
+    def on_createNewLogAction_triggered(self):
+        self.log = ""
+        self.textEdit.setPlainText('')
+        with open('log.txt') as log:
+            logcontent = log.read()
+        date = datetime.now().strftime('%d-%m-%y')
+        filename = "log-" + date + ".txt"
+        with open(filename, 'w') as newlog: newlog.write(logcontent)
+        with open('log.txt', 'w') as log: log.write('')
+        
