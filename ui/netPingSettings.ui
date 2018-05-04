@@ -9,8 +9,8 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>367</width>
-    <height>446</height>
+    <width>410</width>
+    <height>530</height>
    </rect>
   </property>
   <property name="sizePolicy">
@@ -30,8 +30,8 @@
     <rect>
      <x>10</x>
      <y>10</y>
-     <width>351</width>
-     <height>431</height>
+     <width>394</width>
+     <height>518</height>
     </rect>
    </property>
    <layout class="QVBoxLayout" name="verticalLayout">
@@ -70,25 +70,36 @@
       <item row="2" column="1">
        <widget class="QLineEdit" name="comEdit"/>
       </item>
-      <item row="3" column="0">
-       <widget class="QLabel" name="comSpeed">
-        <property name="text">
-         <string>COM-speed</string>
-        </property>
-       </widget>
-      </item>
       <item row="3" column="1">
        <widget class="QLineEdit" name="lineEdit_4"/>
       </item>
-      <item row="4" column="0">
+      <item row="5" column="0">
        <widget class="QLabel" name="label_4">
         <property name="text">
          <string>Критическая температура</string>
         </property>
        </widget>
       </item>
-      <item row="4" column="1">
+      <item row="5" column="1">
        <widget class="QLineEdit" name="maxTempEdit"/>
+      </item>
+      <item row="3" column="0">
+       <layout class="QHBoxLayout" name="horizontalLayout">
+        <item>
+         <widget class="QLabel" name="comSpeed">
+          <property name="text">
+           <string>COM-speed</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QCheckBox" name="enableAutoSpeedCheckbox">
+          <property name="text">
+           <string>auto</string>
+          </property>
+         </widget>
+        </item>
+       </layout>
       </item>
      </layout>
     </item>
@@ -107,6 +118,27 @@
        <bool>true</bool>
       </property>
      </widget>
+    </item>
+    <item>
+     <layout class="QFormLayout" name="formLayout_3">
+      <item row="0" column="0">
+       <widget class="QLabel" name="label">
+        <property name="text">
+         <string>Максим. размер лога (в байтах)  </string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="QSpinBox" name="maxLogSize">
+        <property name="maximum">
+         <number>1048576000</number>
+        </property>
+        <property name="value">
+         <number>1048576</number>
+        </property>
+       </widget>
+      </item>
+     </layout>
     </item>
     <item>
      <widget class="QLabel" name="label_5">

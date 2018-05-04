@@ -26,9 +26,11 @@ class netPingSettings(QDialog, Ui_Dialog):
         self.config['comtest']['port'] = self.comEdit.text()
         self.config['comtest']['speed'] = self.lineEdit_4.text()
         self.config['comtest']['maxtemp'] = self.maxTempEdit.text()
+        self.config['comtest']['autoSpeed'] = str(self.enableAutoSpeedCheckbox.isChecked())
         self.config['modemsettings']['ip1'] = str(self.ip1reboot.isChecked())
         self.config['modemsettings']['ip2'] = str(self.ip2reboot.isChecked())
         flags = ''
+        self.config['logsettings']['maxlogsize'] = str(self.maxLogSize.value())
         self.config['logsettings']['onsysup'] = str(self.sysStartUp.isChecked())
         if self.sysStartUp.isChecked(): flags += '1'
         else: flags += '0'
@@ -56,3 +58,8 @@ class netPingSettings(QDialog, Ui_Dialog):
     @pyqtSlot()
     def on_cancelButton_released(self):
         self.close()
+    
+    @pyqtSlot(bool)
+    def on_enableAutoSpeedCheckbox_toggled(self, checked):
+        if checked: self.lineEdit_4.setEnabled(False)
+        else: self.lineEdit_4.setEnabled(True)
