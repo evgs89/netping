@@ -1,11 +1,9 @@
 import subprocess, threading
 from time import sleep
-from PyQt5.Qt import QObject
-from PyQt5.QtCore import pyqtSignal
 
-class pinger(QObject):
+
+class pinger():
     
-    stateChangedSignal = pyqtSignal(str, bool)
     def __init__(self, address, timeout = 1, messages = None):
         """
         address - plain text (ip or domain name, ex. www.address.com)
@@ -54,7 +52,6 @@ class pinger(QObject):
     def __stateChanged(self, state):
         if self.__messages != None: self.__messages.put([self.__address, state])
         self.state = state
-        self.stateChangedSignal.emit(self.__address, state)
         
     def start(self, delay = 0):
         sleep(delay)
