@@ -11,16 +11,15 @@ import configparser
 import csv
 import os
 import serial
-import tkinter.ttk as ttk
-import threading, queue, tkinter
-from tkinter import messagebox
-try: import ui.tk_NetPing_support as tk_NetPing_support
-except: import tk_NetPing_support
+import threading, queue
+from PyQt5.QtCore import pyqtSlot, pyqtSignal
+from PyQt5.QtGui import QTextCursor
+from PyQt5.QtWidgets import QMainWindow, QMessageBox, QLabel
+from PyQt5.Qt import QObject
+
 from ui.extClasses import pinger
-import ui.tk_NetPing as npMain
-import ui.tk_settingsForm as tk_settingsForm
-try: import tk_settingsForm_support
-except: import ui.tk_settingsForm_support as tk_settingsForm_support
+from ui.netPingSettings import netPingSettings
+from .Ui_netPing import Ui_MainWindow
 
 """
 раз в секунду принимаем от нетпинга в ASCII знак и две цифры температуры
@@ -32,6 +31,7 @@ except: import ui.tk_settingsForm_support as tk_settingsForm_support
 33 - доп реле 1 перезагрузить
 55 - доп реле 2 перезагрузить
 перезагрузка при превышении температуры происходит по команде с компа(44)
+
 """
 
 class comLoop:
@@ -50,21 +50,20 @@ class comLoop:
         self.queue = queue.Queue()
         self.t1enabled = True
         self.t1 = threading.Thread(target = self.__queueHandler, args = (self.queue,))
+        #self.t1.daemon = True
         self.t1.start()
     
     def start(self, delay = 0):
         if not self.needToRebootModem: self.comSendCommandQueue.put('1')
         else: self.comSendCommandQueue.put('2')
         self.comEnabled = True
-        self.t = threading.Thread(target = self.__comLoop, args = (delay, ))
+        self.t = threading.Thread(target = self.__comLoop, args = (delay, )) #, self.com, self.speed, self.autoSpeed))
         self.t.start()
         return(0)
     
     def settingsChanged(self, com, speed, auto = True):
-        print('111')
         try:
             if self.ser.port != com or self.speed != speed or auto != self.autoSpeed:
-                print('changing')
                 if self.stop() == 0:
                     self.ser.port = com
                     self.com = com
@@ -77,10 +76,7 @@ class comLoop:
                     else: 
                         self.autoSpeed = False
                         self.restart(2)
-            else: 
-                if not self.comEnabled: self.start(0)
         except:
-            print('starting new com')
             self.com = com
             self.speed = speed
             self.autoSpeed = auto
@@ -140,10 +136,10 @@ class comLoop:
         return 0
     
     def sendCommand(self, command):
-        print(self.com + ' command sent: ' + command)
+        print(self.com + ' отправлена команда ' + command)
         self.comSendCommandQueue.put(command)
     
-    def __comLoop(self, delay):
+    def __comLoop(self, delay): #, com, speed, auto): #queue, commandQueue,, comEnabled
         self.queue.put(['message', 'comLoop started'])
         com = self.com
         speed = self.speed
@@ -166,7 +162,6 @@ class comLoop:
             self.ser.baudrate = speed
             self.ser.timeout = 1
             while self.comEnabled:
-                rebootModem = self.needToRebootModem
                 if self.ser.readline() == b'': 
                     counter += 1
                     self.queue.put(['message', 'read empty'])
@@ -257,66 +252,93 @@ class comLoop:
             except:
                 sleep(.3)
 
-class MainWindow():
+class comStateWatcher(QObject):
+    comStateChanged = pyqtSignal(bool, int)
+    comStateText = pyqtSignal(str)
+    tempChanged = pyqtSignal(str)
+    def __init__(self, com):
+        super(comStateWatcher, self).__init__()
+        self.enabled = True
+        self.state = {'opened':False, 'temp':'', 'sleeping':0}
+    
+    def changeCom(self, com, delay = 0):
+        sleep(delay)
+        self.enabled = False
+        try:
+            while self.t.is_active: sleep(.1)
+        except: pass
+        self.enabled = True
+        self.c = com
+        self.c_name = com.com
+        self.t = threading.Thread(target = self.__mainLoop, args = ())
+        #self.t.daemon = True
+        self.t.start()
+        
+    def __mainLoop(self):
+        while self.enabled:
+            try:
+                if self.c.state['sleeping'] != 0: 
+                    print('sleeping')
+                    if self.state['opened']:
+                        self.comStateChanged.emit(False, None)
+                        self.comStateText.emit(self.c.com + " закрыт")
+                        self.state['opened'] = False
+                        self.state['temp'] = ''
+                    self.comStateText.emit(self.c.com + " перезапуск через " + str(self.c.state['sleeping'])  + " сек")
+                else:
+                    if not self.c.state['opened']  and not self.state['opened']: self.comStateText.emit(self.c.com + " открываем")
+                    if self.c.state['opened']  and not self.state['opened']: 
+                        self.comStateChanged.emit(True, self.c.state['speed'])
+                        self.comStateText.emit(self.c.com + " открыт")
+                        self.state['opened'] = self.c.state['opened']
+                    if not self.c.state['opened']  and self.state['opened']: 
+                        self.comStateChanged.emit(False, None)
+                        self.comStateText.emit(self.c.com + " закрыт")
+                        self.state['opened'] = self.c.state['opened']
+                    if self.state['opened']:
+                        if self.c.state['temp'] != self.state['temp']: 
+                            if self.c.state['temp'] != '':
+                                self.state['temp'] = self.c.state['temp']
+                                self.tempChanged.emit(self.state['temp'])
+                            else:
+                                self.comStateText.emit(self.c.com + " не отвечает")
+                sleep(1)
+            except:
+                print('comWatcher ERROR')
+                self.comStateChanged.emit(False, None)
+                self.comStateText.emit(self.c_name + " закрыт")
+                self.enabled = False
+        print('comWatcher STOPPED')
+        return(0)
+
+class MainWindow(QMainWindow, Ui_MainWindow): #class MainWindow(QMainWindow, Ui_MainWindow):
     def __init__(self, parent=None):
-        self.start_gui()
-        self.statusMessage = tkinter.StringVar()
-        self.comState = tkinter.StringVar()
-        self.ip1State = tkinter.StringVar()
-        self.ip2State = tkinter.StringVar()
-        self.ip1 = ""
-        self.ip2 = ""
-        self.w.TLabel1.configure(textvariable = self.statusMessage)
-        self.w.send_command.entryconfig('Restart COM', command = self.__restartCom)
-        self.w.send_command.entryconfig('Enable commands (7)', command = self.on_enableCommandsAction_triggered)
-        self.w.send_command.entryconfig('Disable commands (6)', command = self.on_disableCommandsAction_triggered)
-        self.w.send_command.entryconfig('Reboot all (4)', command = self.on_restartAllAction_triggered)
-        self.w.send_command.entryconfig('Reboot modem', command = self.on_restartModemAction_toggled)
-        self.w.other_commands.entryconfig('3', command = self.on_sendCommand3_triggered)
-        self.w.other_commands.entryconfig('5', command = self.on_sendCommand5_triggered)
-        self.w.more.entryconfig('Setup', command = self.on_settingsAction_triggered)
-        self.w.more.entryconfig('New log', command = self.on_createNewLogAction_triggered)
-        self.w.more.entryconfig('Clear current log', command = self.on_clearLogAction_triggered)
-        self.messages = queue.Queue()
+        super(MainWindow, self).__init__(parent)
+        self.setupUi(self)
+        self.log = ""
         self.watchdogEnabled = True
         self.c = comLoop()
+        self.createComWatcher(self.c)
         self.readConfig()
         try: 
-            with open('tmp') as tmp: self.logWrite('Abnormal shutdown', 1, tmp.read())
+            with open('tmp') as tmp: self.logWrite('Неожиданное выкл-е', 1, tmp.read())
         except: pass
         self.t1 = threading.Thread(target = self.watchdog, args = ())
         self.t1.daemon = True
         self.t1.start()
-        self.t2 = threading.Thread(target = self.__com_watcher, args = ()) ## Будет работать только без Qt
-        self.t2.start()
-        self.logWrite('Startup', 0)
-        root.protocol("WM_DELETE_WINDOW", self.closeEvent)
-        root.mainloop()
+#        self.comStateChanged.connect(self.comStateSlot)
+#        self.t2 = threading.Thread(target = self.__com_watcher, args = ()) ## Будет работать только без Qt
+#        self.t2.start()
+        self.logWrite('Запуск', 0)
     
-    def start_gui(self):
-        global val, w, root
-        root = tkinter.Tk()
-        tk_NetPing_support.set_Tk_var()
-        self.w = npMain.New_Toplevel (root)
-        icon = tkinter.Image("photo", file = './ui/icons/notification.png')
-        root.wm_iconphoto('True', icon)
-        root.geometry("300x450-20+50")
-        tk_NetPing_support.init(root, self.w)
 
     def readConfig(self):
         self.config = configparser.ConfigParser(allow_no_value = True)
-        try:
-            self.w.comState.pack_forget()
-        except:
-            pass
-        try:
-            self.w.ip1state.pack_forget()
-        except:
-            pass
-        try:
-            self.w.ip2state.pack_forget()
-        except:
-            pass
+        while self.indicatorsLayout.count():
+            item = self.indicatorsLayout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
         try:
             self.config.read('settings.ini')
             print('config read success, ' + self.config['comtest']['port'])
@@ -351,78 +373,96 @@ class MainWindow():
         self.needToRebootModem2 = False
         self.needToRebootModem3 = False
         if self.config.getboolean('comtest', 'enabled'):
-            self.w.comState = ttk.Label(self.w.frame1)
-            self.w.comState.configure(textvariable = self.comState)
-            self.w.comState.pack(side = 'bottom', fill = 'x')
-            self.w.menubar.entryconfig('Send command', state = 'normal')
-            if not self.c.state['opened']: self.comStateChanged('Starting ' + self.config['comtest']['port'])
-            else: self.tempChanged(self.c.state['temp'])
+            self.comState = QLabel(self.centralWidget)
+            self.comState.setObjectName("comState")
+            self.indicatorsLayout.addWidget(self.comState)
+            self.restartComAction.setEnabled(True)
+            self.restartModemAction.setEnabled(True)
+            self.disableCommandsAction.setEnabled(True)
+            self.restartAllAction.setEnabled(True)
+            self.enableCommandsAction.setEnabled(True)
+            self.sendCommand3.setEnabled(True)  
+            self.sendCommand5.setEnabled(True)
+            self.comStateChanged('Запускаем ' + self.config['comtest']['port'])
             print('changing settings of comLoop')
             self.c.settingsChanged(self.config['comtest']['port'], self.config['comtest']['speed'], self.config.getboolean('comtest', 'autoSpeed'))
+            self.cw.changeCom(self.c, 1)
         else:
-            self.w.menubar.entryconfig('Send command', state = 'disabled')
+            self.restartComAction.setEnabled(False)
+            self.restartModemAction.setEnabled(False)
+            self.disableCommandsAction.setEnabled(False)
+            self.restartAllAction.setEnabled(False)
+            self.enableCommandsAction.setEnabled(False)
+            self.sendCommand3.setEnabled(False)  
+            self.sendCommand5.setEnabled(False) 
             try: 
+                self.cw.enabled = False
                 self.c.stop()
             except: pass
         if self.config['iptest']['ip1'] != '':
+            self.ip1State = QLabel(self.centralWidget)
+            self.ip1State.setObjectName("ip1State")
+            self.indicatorsLayout.addWidget(self.ip1State)
             self.ip1 = self.config['iptest']['ip1']
-            self.ip1State.set(self.ip1 + ' does not response')
-            self.w.ip1state = ttk.Label(self.w.frame1)
-            self.w.ip1state.configure(textvariable = self.ip1State)
-            self.w.ip1state.pack(side = 'top', fill = 'x')
-            self.ip1 = self.config['iptest']['ip1']
-            self.p1 = pinger(self.ip1, 5, self.messages)
+            self.p1 = pinger(self.ip1, 5)
+            self.ip1State.setText(self.ip1 + ' не отвечает')
+            self.p1.stateChangedSignal.connect(self.ipStateChanged)
             self.ipStateChanged( self.ip1, False)
             self.p1.start()
         else: 
             try: self.p1.stop()
             except: pass
         if self.config['iptest']['ip2'] != '':
+            self.ip2State = QLabel(self.centralWidget)
+            self.ip2State.setObjectName("ip2State")
+            self.indicatorsLayout.addWidget(self.ip2State)
             self.ip2 = self.config['iptest']['ip2']
-            self.ip2State.set(self.ip2 + ' does not response')
-            self.w.ip2state = ttk.Label(self.w.frame1)
-            self.w.ip2state.configure(textvariable = self.ip2State)
-            self.w.ip2state.pack(side = 'top', fill = 'x')
-            self.ip2 = self.config['iptest']['ip2']
-            self.p2 = pinger(self.ip2, 5, self.messages)
+            self.p2 = pinger(self.ip2, 5)
+            self.ip1State.setText(self.ip1 + ' не отвечает')
+            self.p2.stateChangedSignal.connect(self.ipStateChanged)
             self.ipStateChanged( self.ip2, False)
             self.p2.start()
         else: 
             try: self.p2.stop()
             except: pass
         
+    def createComWatcher(self, com):
+        self.cw = comStateWatcher(com)
+        self.cw.tempChanged.connect(self.tempChanged)
+        self.cw.comStateText.connect(self.comStateChanged)
+        self.cw.comStateChanged.connect(self.comStateSlot)
+        
     def ipStateChanged(self, ip, state):
         try:
             if ip == self.ip1: 
+                label = self.ip1State
                 logcat = 2
                 if self.config.getboolean('modemsettings', 'ip1'):
                     if not state and self.config.getboolean('modemsettings', 'ip1'): self.needToRebootModem1 = True
                     if state: self.needToRebootModem1 = False
             if ip == self.ip2:
+                label = self.ip2State
                 logcat = 3
                 if self.config.getboolean('modemsettings', 'ip2'):
                     if not state and self.config.getboolean('modemsettings', 'ip2'): self.needToRebootModem2 = True
                     if state: self.needToRebootModem2 = False
         except: pass
         if self.config.getboolean('comtest', 'enabled') == True: self.c.needToRebootModem = bool(self.needToRebootModem1 + self.needToRebootModem2 + self.needToRebootModem3)
-        if state: text = ip + ' avialible'
-        else: text = ip + ' unavialible'
-        if ip == self.ip1:
-           self.ip1State.set(text)
-        if ip == self.ip2:
-            self.ip2State.set(text)
+        if state: text = ip + ' доступен'
+        else: text = ip + ' недоступен'
+        label.setText(text)
         self.logWrite(text, logcat)
     
     def logWrite(self, text, category, time = None):
-        self.statusMessage.set(text)
+        self.statusMessage.setText(text)
         if time == None: dt = datetime.now().strftime('%d/%m/%y %H:%M:%S')
         else: dt = time
         with open('log.txt',  'a', newline='') as logfile:
             logwriter = csv.writer(logfile, dialect='unix')
             logwriter.writerow([category, dt, text])
             if self.config['logsettings']['flags'][category] == '1': 
-                self.w.Scrolledtext1.insert(tkinter.END, (dt + ' ' + text + '\n'))
-                self.w.Scrolledtext1.see(tkinter.END)
+                self.log += (dt + ' ' + text + '\n')
+        self.__log_refresh()
     
     def logRead(self):
         try: #create empty log if there is no file
@@ -432,50 +472,58 @@ class MainWindow():
         except: 
             if os.path.getsize('log.txt') > int(self.config['logsettings']['maxlogsize']):
                 self.on_createNewLogAction_triggered()
-                self.logWrite('Log is too big, started new one',  1)
+                self.logWrite('Лог слишком большой, начат новый',  1)
         with open('log.txt', newline = '') as logfile: #read log
-            self.w.Scrolledtext1.delete(1.0, tkinter.END)
+            self.log = ""
             try:
                 logreader = csv.reader(logfile, dialect = "unix")
             except:
                 self.on_createNewLogAction_triggered()
-                self.logWrite('Log is damaged, started new one',  1)
+                self.logWrite('Лог повреждён, начат новый',  1)
                 logreader = csv.reader(logfile, dialect = "unix")
             for row in logreader:
                 if self.config['logsettings']['flags'][int(row[0])] == '1':
-                    self.w.Scrolledtext1.insert(tkinter.END, (row[1] + ' ' + row[2] + '\n'))
-                    self.w.Scrolledtext1.see(tkinter.END)
+                    self.log += (row[1] + ' ' + row[2] + '\n')
+            self.__log_refresh()
+            
+    
+    def __log_refresh(self):
+        self.textEdit.setPlainText(self.log)
+        self.cur = self.textEdit.textCursor()
+        self.cur.movePosition(QTextCursor.End)
+        self.textEdit.setTextCursor(self.cur)
+        
     
     def watchdog(self):
         while self.watchdogEnabled:
             tmpfile = open('tmp', 'w')
             tmpfile.write(datetime.now().strftime('%d/%m/%y %H:%M:%S'))
             tmpfile.close()
-            self.statusMessage.set(datetime.now().strftime('%H:%M %d/%m') + ' controlling...')
+            self.statusMessage.setText(datetime.now().strftime('%H:%M %d/%m') + ' контроль активен')
             try: 
-                if self.c.needToRebootModem: self.statusMessage.set(datetime.now().strftime('%H:%M %d/%m') + ' waiting for modem reboot...')
+                if self.c.needToRebootModem: self.statusMessage.setText(datetime.now().strftime('%H:%M %d/%m') + ' ждём перезагрузки модема')
             except: pass
             sleep(15)
             
     def comStateChanged(self, text):
-        self.comState.set(text)
+        self.comState.setText(text)
         
     def tempChanged(self, temp):
-        self.comState.set(self.c.com + ' is active, t = ' + temp)
-        self.statusMessage.set(datetime.now().strftime('%H:%M:%S %d/%m') + ' t = ' + temp)
+        self.comState.setText(self.c.com + ' активен, t = ' + temp)
+        self.statusMessage.setText(datetime.now().strftime('%H:%M:%S %d/%m') + ' t = ' + temp)
         if len(temp) == 3: 
             self.logWrite(('t = ' + str(temp)), 5)
             if int(temp[1:]) >= int(self.config['comtest']['maxtemp']): 
-                self.logWrite('OVERHEATING!!!', 4)
+                self.logWrite('ПРЕВЫШЕНИЕ КРИТ. ТЕМПЕРАТУРЫ', 4)
                 self.c.sendCommand('4')
         
     def comStateSlot(self, state, speed = None):
         com = str(self.c.com)
         if state: 
-            self.logWrite(com + ' is active', 4)
+            self.logWrite(com + ' активен', 4)
         else: 
-            self.logWrite(com + ' is not active', 4)
-            self.comState.set(com + ' is not active')
+            self.logWrite(com + ' неактивен', 4)
+            self.comState.setText(com + ' неактивен')
         if state and speed != None:
             if speed == 1200 or speed == 9600:
                 if str(speed) != self.config['comtest']['speed']:
@@ -483,79 +531,56 @@ class MainWindow():
                     configfile = open('settings.ini', 'w')
                     self.config.write(configfile)
                     configfile.close()
-                    self.logWrite((com + ' speed: '+ str(speed)), 4)
+                    self.logWrite((com + ' скорость: '+ str(speed)), 4)
 
-    def closeEvent(self):
-        self.watchdogEnabled = False
-        try: os.remove('tmp')
-        except: pass
-        self.logWrite('Shutdown', 1)
+    @pyqtSlot()
+    def closeEvent(self, event):
         if self.config.getboolean('comtest', 'enabled'):
             try:
                 if self.c.state['opened']:
-                    self.w.TLabel1.configure(text = "Processing shutdown...") ##Не работает, ну и ладно
+                    self.comState.setText("Завершение работы...")
                     print('try to stop, send 6')
                     self.c.sendCommand('6')
+                    self.cw.comStateText.disconnect()
                     sleep(6)
                 self.c.stop()
                 self.c.t1enabled = False
             except: pass
+        try: os.remove('tmp')
+        except: pass
+        self.logWrite('Выключение', 1)
         try: self.p1.stop()
         except: pass
         try: self.p2.stop()
         except: pass
-        root.destroy()
+        self.watchdogEnabled = False
+        self.cw.enabled = False
+        event.accept()
     
+    @pyqtSlot()
     def on_settingsAction_triggered(self):
-        self.setWin = tk_settingsForm.create_New_Toplevel(root)[1]
-        self.setWin.TButton1.configure(command = self.__save_settings)
-        self.setWin.TButton2.configure(command = tk_settingsForm.destroy_New_Toplevel)
-        tk_settingsForm_support.ip1.set(self.config['iptest']['ip1'])
-        tk_settingsForm_support.ip2.set(self.config['iptest']['ip2'])
-        tk_settingsForm_support.comPortEnabledChecked.set('1' if self.config.getboolean('comtest', 'enabled') else '0')
-        tk_settingsForm_support.enableAutoSpeed.set('1' if self.config.getboolean('comtest', 'autoSpeed') else '0')
-        tk_settingsForm_support.comPort.set(self.config['comtest']['port'])
-        tk_settingsForm_support.comSpeed.set(self.config['comtest']['speed'])
-        tk_settingsForm_support.critTemp.set(self.config['comtest']['maxtemp'])
-        tk_settingsForm_support.ip1rebootChecked.set('1' if self.config.getboolean('modemsettings', 'ip1') else '0')
-        tk_settingsForm_support.ip2rebootChecked.set('1' if self.config.getboolean('modemsettings', 'ip2') else '0')
-        tk_settingsForm_support.maxLogSize.set(self.config['logsettings']['maxlogsize'])
-        tk_settingsForm_support.ip1Log.set('1' if self.config.getboolean('logsettings', 'ip1') else '0')
-        tk_settingsForm_support.ip2Log.set('1' if self.config.getboolean('logsettings', 'ip2') else '0')
-        tk_settingsForm_support.sysStartUp.set('1' if self.config.getboolean('logsettings', 'onsysup') else '0')
-        tk_settingsForm_support.sysShutdown.set('1' if self.config.getboolean('logsettings', 'onsysdown') else '0')
-        tk_settingsForm_support.comPortLog.set('1' if self.config.getboolean('logsettings', 'com') else '0')
-        tk_settingsForm_support.tempLog.set('1' if self.config.getboolean('logsettings', 'tempchange') else '0')
-        
-    def __save_settings(self):
-        self.config['iptest']['ip1'] = tk_settingsForm_support.ip1.get()
-        self.config['iptest']['ip2'] = tk_settingsForm_support.ip2.get()
-        self.config['comtest']['enabled'] = 'True' if tk_settingsForm_support.comPortEnabledChecked.get() == '1' else 'False'
-        self.config['comtest']['autoSpeed'] = 'True' if tk_settingsForm_support.enableAutoSpeed.get() == '1' else 'False'
-        self.config['comtest']['port'] = tk_settingsForm_support.comPort.get()
-        self.config['comtest']['speed'] = tk_settingsForm_support.comSpeed.get()
-        self.config['comtest']['maxtemp'] = tk_settingsForm_support.critTemp.get()
-        self.config['modemsettings']['ip1'] = 'True' if tk_settingsForm_support.ip1rebootChecked.get() == '1' else 'False'
-        self.config['modemsettings']['ip2'] = 'True' if tk_settingsForm_support.ip2rebootChecked.get() == '1' else 'False'
-        self.config['logsettings']['maxlogsize'] = tk_settingsForm_support.maxLogSize.get()
-        self.config['logsettings']['onsysup'] = 'True' if tk_settingsForm_support.sysStartUp.get() == '1' else 'False'
-        self.config['logsettings']['onsysdown'] = 'True' if tk_settingsForm_support.sysShutdown.get() == '1' else 'False'
-        self.config['logsettings']['ip1'] = 'True' if tk_settingsForm_support.ip1Log.get() == '1' else 'False'
-        self.config['logsettings']['ip2'] = 'True' if tk_settingsForm_support.ip2Log.get() == '1' else 'False'
-        self.config['logsettings']['com'] = 'True' if tk_settingsForm_support.comPortLog.get() == '1' else 'False'
-        self.config['logsettings']['tempchange'] = 'True' if tk_settingsForm_support.tempLog.get() == '1' else 'False'
-        flags = ''
-        for i in ['onsysup', 'onsysdown', 'ip1', 'ip2', 'com', 'tempchange']:
-            if i != 'maxlogsize':
-                if self.config['logsettings'][i] == 'True': flags += '1'
-                else: flags += '0'
-        self.config['logsettings']['flags'] = flags
-        with open('settings.ini', 'w') as configfile: self.config.write(configfile)
-        self.t3 = threading.Thread(target = self.readConfig, args = ())
-        self.t3.start()
-        tk_settingsForm.destroy_New_Toplevel()
+        self.setWin = netPingSettings(self)
+        self.setWin.ip1Edit.setText(self.config['iptest']['ip1'])
+        self.setWin.ip2Edit.setText(self.config['iptest']['ip2'])
+        self.setWin.comPortEnabled.setChecked(self.config.getboolean('comtest', 'enabled'))
+        self.setWin.enableAutoSpeedCheckbox.setChecked(self.config.getboolean('comtest', 'autoSpeed'))
+        self.setWin.comEdit.setText(self.config['comtest']['port'])
+        self.setWin.lineEdit_4.setText(self.config['comtest']['speed'])
+        self.setWin.maxTempEdit.setText(self.config['comtest']['maxtemp'])
+        self.setWin.ip1reboot.setChecked(self.config.getboolean('modemsettings', 'ip1'))
+        self.setWin.ip2reboot.setChecked(self.config.getboolean('modemsettings', 'ip2'))
+        self.setWin.maxLogSize.setValue(int(self.config['logsettings']['maxlogsize']))
+        self.setWin.ip1Log.setChecked(self.config.getboolean('logsettings', 'ip1'))
+        self.setWin.ip2Log.setChecked(self.config.getboolean('logsettings', 'ip2'))
+        self.setWin.sysStartUp.setChecked(self.config.getboolean('logsettings', 'onsysup'))
+        self.setWin.sysShutdown.setChecked(self.config.getboolean('logsettings', 'onsysdown'))
+        self.setWin.comPortLog.setChecked(self.config.getboolean('logsettings', 'com'))
+        self.setWin.tempLog.setChecked(self.config.getboolean('logsettings', 'tempchange'))
+        self.setWin.settingsChanged.connect(self.readConfig)
+        self.setWin.show()
         
     
+    @pyqtSlot()
     def on_restartComAction_triggered(self):
         if self.config.getboolean('comtest', 'enabled'): 
             self.t = threading.Thread(target = self.__restartCom, args = ())
@@ -563,76 +588,89 @@ class MainWindow():
     
     def __restartCom(self):
         self.c.restart(5)
+        self.cw.changeCom(self.c, 1)
         
     
+    @pyqtSlot()
     def on_restartAllAction_triggered(self):
-        if messagebox.askyesno('Query', "You have requested for hard reset. Are you sure?"):
+        acq = QMessageBox.question(self, 'Запрос', 'Комплекс будет перезапущен. Вы уверены?', QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if acq == QMessageBox.Yes:
             try: 
                 self.c.sendCommand('4')
-                self.logWrite('Hard reset', 4)
+                self.logWrite('Перезапуск комплекса', 4)
             except: pass
             
+    @pyqtSlot()
     def on_disableCommandsAction_triggered(self):
         if self.config.getboolean('comtest', 'enabled'): self.c.sendCommand('6')
     
+    @pyqtSlot()
     def on_enableCommandsAction_triggered(self):
         if self.config.getboolean('comtest', 'enabled'): self.c.sendCommand('7')
     
+    @pyqtSlot()
     def on_clearLogAction_triggered(self):
-        if messagebox.askyesno('Query', 'Log would be cleaned, all information would be deleted. Are you sure?'):
-            self.w.Scrolledtext1.delete(1.0, tkinter.END)
+        acq = QMessageBox.question(self, 'Запрос', 'Лог будет очищен. Вы уверены?', QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if acq == QMessageBox.Yes:
+            self.log = ''
+            self.textEdit.setPlainText('')
             with open('log.txt', 'w') as log: log.write('')
     
+    @pyqtSlot()
     def on_sendCommand3_triggered(self):
         if self.config.getboolean('comtest', 'enabled'): self.c.sendCommand('3')
     
+    @pyqtSlot()
     def on_sendCommand5_triggered(self):
         if self.config.getboolean('comtest', 'enabled'): self.c.sendCommand('5')
     
-    def on_restartModemAction_toggled(self):
-        p0 = tk_NetPing_support.needToRebootModem.get()
-        print(p0)
-        if self.config.getboolean('comtest', 'enabled') and p0 == '1': 
+    @pyqtSlot(bool)
+    def on_restartModemAction_toggled(self, p0):
+        if self.config.getboolean('comtest', 'enabled') and p0: 
             self.needToRebootModem3 = True
             try: self.c.needToRebootModem = True
             except: pass
-            self.logWrite('Modem restart requested', 4)
-        if self.config.getboolean('comtest', 'enabled') and p0 == '0': 
+            self.logWrite('Задан перезапуск модема', 4)
+        if self.config.getboolean('comtest', 'enabled') and not p0: 
             self.needToRebootModem3 = False
             try: self.c.needToRebootModem = False
             except: pass
-            self.logWrite('Modem restart cancelled', 4)
+            self.logWrite('Отменён перезапуск модема', 4)
     
+    @pyqtSlot()
     def on_createNewLogAction_triggered(self):
-        self.w.Scrolledtext1.delete(1.0, tkinter.END)
+        self.log = ""
         self.textEdit.setPlainText('')
         date = datetime.now().strftime('%d-%m-%y_%H-%M-%S')
         filename = "log-" + date + ".txt"
         os.rename('log.txt', filename)
         with open('log.txt', 'x') as log: log.write('')
-
+    
+    @pyqtSlot()
+    def on_programInfoAction_triggered(self):
+        QMessageBox.information(self, 'О программе', 'Версия 1.3.1 (15.06.2018)', QMessageBox.Ok | QMessageBox.NoButton | QMessageBox.NoButton, QMessageBox.Ok)
+    
     def __com_watcher(self): ## Весь метод будет задействован после перехода на Tk
         state = {'opened':False, 'temp':'', 'sleeping':0}
         while self.watchdogEnabled:
-            self.w.TLabel1.configure(text = self.statusMessage)
             try:
                 if self.c.state['sleeping'] != 0: 
                     print('sleeping')
                     if state['opened']:
                         self.comStateSlot(False)
-                        self.comState.set(self.c.com + " закрыт")
+                        self.comState.setText(self.c.com + " закрыт")
                         state['opened'] = False
                         state['temp'] = ''
-                    self.comState.set(self.c.com + " restarting after " + str(self.c.state['sleeping'])  + " sec")
+                    self.comState.setText(self.c.com + " перезапуск через " + str(self.c.state['sleeping'])  + " сек")
                 else:
                     if self.c.state['opened']  and not state['opened']: 
                         self.comStateSlot(True, self.c.state['speed'])
-                        self.comState.set(self.c.com + " opened")
+                        self.comState.setText(self.c.com + " открыт")
                         state['opened'] = self.c.state['opened']
                         self.tempChanged(self.c.state['temp'])
                     if not self.c.state['opened']  and state['opened']: 
                         self.comStateSlot(False)
-                        self.comState.set(self.c.com + " closed")
+                        self.comState.setText(self.c.com + " закрыт")
                         state['opened'] = self.c.state['opened']
                     if state['opened']:
                         if self.c.state['temp'] != state['temp']: 
@@ -642,18 +680,8 @@ class MainWindow():
                             else:
                                 self.comStateSlot(False)
                                 state['opened'] = False
-                                self.comState.set(self.c.com + " does not response")
-                try:
-                    q = self.messages.get_nowait()
-                    self.ipStateChanged(q[0], q[1])
-                except: pass 
-            except: pass
-            finally: sleep(1)
-    
-    def __ip_watcher(self):
-        while self.watchdogEnabled:
-            try:
-                q = self.messages.get_nowait()
-                self.ipStateChanged(q[0], q[1])
-            except: sleep(1) 
+                                self.comState.setText(self.c.com + " не отвечает")
+                sleep(1)
+            except:
+                sleep(1)
 
