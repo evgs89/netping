@@ -4,18 +4,23 @@
 Module implementing MainWindow.
 """
 
-from PyQt5.QtCore import pyqtSlot, pyqtSignal
-from PyQt5.QtWidgets import QMainWindow, QMessageBox, QLabel
-from PyQt5.QtGui import QTextCursor
-from PyQt5.Qt import QObject
-from time import sleep
-import serial, configparser, os, threading, csv
 from datetime import datetime
+from time import sleep
 
-from .Ui_netPing import Ui_MainWindow
-from ui.tempLogView import tempLogView
-from ui.netPingSettings import netPingSettings
+import configparser
+import csv
+import os
+import serial
+import threading, queue
+from PyQt5.QtCore import pyqtSlot, pyqtSignal
+from PyQt5.QtGui import QTextCursor
+from PyQt5.QtWidgets import QMainWindow, QMessageBox, QLabel
+from PyQt5.Qt import QObject
+
 from ui.extClasses import pinger
+from ui.netPingSettings import netPingSettings
+from .Ui_netPing import Ui_MainWindow
+
 """
 раз в секунду принимаем от нетпинга в ASCII знак и две цифры температуры
 раз в секунду отправляем 11
@@ -29,49 +34,72 @@ from ui.extClasses import pinger
 
 """
 
-
-class comLoop(QObject):
-    tempChangedSignal = pyqtSignal(str)
-    statusMessage = pyqtSignal(str)
-    comStateSignal = pyqtSignal(bool, int)
-    comState = False
-    def __init__(self, com, speed, auto = True):
+class comLoop:
+    
+    def __init__(self):
         super(comLoop, self).__init__()
-        self.com = com
-        self.speed = speed
+        self.com = None
+        self.speed = None
         self.needToRebootModem = False
         self.autoChangeSpeedCounter = 3
-        self.autoSpeed = auto
-        self.comSendCommandQueue = []
+        self.autoSpeed = None
+        self.restarting = False
+        self.comSendCommandQueue = queue.Queue()
+        self.comEnabled = False
+        self.state = {'opened':False, 'temp':'', 'sleeping':0, 'speed':self.speed}
+        self.queue = queue.Queue()
+        self.t1enabled = True
+        self.t1 = threading.Thread(target = self.__queueHandler, args = (self.queue,))
+        #self.t1.daemon = True
+        self.t1.start()
     
     def start(self, delay = 0):
-        if not self.needToRebootModem: self.comSendCommand = '1'
-        else: self.comSendCommand = '2'
-        self.t = threading.Thread(target = self.__comLoop, args = [delay])
-        self.t.daemon = True
+        if not self.needToRebootModem: self.comSendCommandQueue.put('1')
+        else: self.comSendCommandQueue.put('2')
+        self.comEnabled = True
+        self.t = threading.Thread(target = self.__comLoop, args = (delay, )) #, self.com, self.speed, self.autoSpeed))
         self.t.start()
-
-    def settingsChanged(self, com, speed, auto = True):
-        self.ser.port = com
-        self.com = com
-        self.ser.baudrate = speed
-        self.speed = speed
-        if auto: 
-            self.autoSpeed = True
-            self.autoChangeSpeedCounter = 3
-            self.restart(2)
-        else: self.autoSpeed = False
-        
+        return(0)
     
-    def restart(self, delay=10):
-        self.statusMessage.emit(self.com + ' перезапуск, ' + str(delay) + ' сек')
-        if self.stop() == 0: 
-            print('com restart, delay = ' + str(delay))
-            self.start(delay)
-        
-    def autoChangeSpeed(self):
-        print('autoChange counter = ',  self.autoChangeSpeedCounter)
-        if self.autoChangeSpeedCounter > 0 and self.autoSpeed == True: 
+    def settingsChanged(self, com, speed, auto = True):
+        try:
+            if self.ser.port != com or self.speed != speed or auto != self.autoSpeed:
+                if self.stop() == 0:
+                    self.ser.port = com
+                    self.com = com
+                    self.ser.baudrate = speed
+                    self.speed = speed
+                    if auto: 
+                        self.autoSpeed = True
+                        self.autoChangeSpeedCounter = 3
+                        self.restart(2)
+                    else: 
+                        self.autoSpeed = False
+                        self.restart(2)
+        except:
+            self.com = com
+            self.speed = speed
+            self.autoSpeed = auto
+            if auto: 
+                self.autoSpeed = True
+                self.autoChangeSpeedCounter = 3
+                self.start(0)
+            else: 
+                self.autoSpeed = False
+                self.start(0)
+    
+    def restart(self, delay = 10):
+        if not self.restarting:
+            self.restarting = True
+            print('restarting COM, delay = ' + str(delay))
+            if self.stop() == 0: 
+                self.state = {'opened':False, 'temp':'', 'sleeping':delay, 'speed':self.speed}
+                print('com restart, delay = ' + str(delay))
+                self.start(delay)
+    
+    def autoChangeSpeed(self): 
+        print('autoChange counter = ' + str(self.autoChangeSpeedCounter))
+        if self.autoChangeSpeedCounter > 0 and self.autoSpeed and self.comEnabled: 
             print(self.speed)
             self.autoChangeSpeedCounter -= 1
             if self.speed == 1200: 
@@ -79,110 +107,222 @@ class comLoop(QObject):
             else: 
                 self.speed = 1200
             print('speed changed,now ' + str(self.speed))
-            self.restart(1)
+            self.restart(2)
             return True
-        elif self.autoSpeed == False:
+        elif self.autoSpeed == False and self.comEnabled:
             print('possibly wrong speed, auto disabled')
             self.restart(2)
             return False
-        else: 
+        elif self.comEnabled: 
             print('autospeed not successful, restart com')
             self.autoChangeSpeedCounter = 3
-            self.restart(2)
+            self.restart(10)
             return False
+        else:
+            print("stopping com")
     
     def stop(self):
         self.comEnabled = False
-        while self.ser.is_open: 
-            sleep(.5)
-            print('thread still active!!!') ##DEBUG
+        try:
+            while self.t.is_alive():
+                print('thread still alive')
+                sleep(.5)
+        except: print('thread finished')
+        finally:
+            try:
+                if self.ser.is_open(): self.ser.close()
+            except: pass
         print('com stopped')
         return 0
-        
-    def sendCommand(self, command):
-        self.statusMessage.emit(self.com + ' отправлена команда ' + command)
-        self.comSendCommandQueue.append(command)
     
-    def __comLoop(self, delay):
-        sleep(delay)
-        self.comEnabled = True
-        self.temp = '0'
-        self.comFinished = False
+    def sendCommand(self, command):
+        print(self.com + ' отправлена команда ' + command)
+        self.comSendCommandQueue.put(command)
+    
+    def __comLoop(self, delay): #, com, speed, auto): #queue, commandQueue,, comEnabled
+        self.queue.put(['message', 'comLoop started'])
+        com = self.com
+        speed = self.speed
+        auto = self.autoSpeed
+        while delay > 0 and self.comEnabled:
+            self.queue.put(['sleep', delay])
+            delay -= 1
+            sleep(1)
+        self.queue.put(['sleep', 0])
+        self.restarting = False
+        comState = False
+        comSendCommand = '1'
+        rebootModem = False
         try: 
-            print('try open ' + self.com + ' at speed ' + str(self.speed))
-            self.ser = serial.Serial(self.com)
-            self.ser.baudrate = self.speed
-            self.ser.timeout = 1
+            self.queue.put(['message', 'try open ' + com + ' at speed ' + str(speed)])
             counter = 0
-            if self.ser.readline(): self.statusMessage.emit(self.com + ' активен')
+            badCounter = 3
+            temp = ''
+            self.ser = serial.Serial(com)
+            self.ser.baudrate = speed
+            self.ser.timeout = 1
             while self.comEnabled:
                 if self.ser.readline() == b'': 
                     counter += 1
-                    print('read empty')
+                    self.queue.put(['message', 'read empty'])
                     if counter > 5: 
-                        if self.comState:
-                            self.comStateSignal.emit(False, None)
-                            self.comState = False
+                        if comState:
+                            self.queue.put(['state', [False, None]])
+                            comState = False
                             self.ser.close()
-                        if self.comEnabled: self.autoChangeSpeed()
+                        if self.comEnabled: self.queue.put(['command', 'autoChangeSpeed'])
                 else:
-                    temp = self.ser.readline().decode('ascii')
+                    if self.comEnabled: ttemp = self.ser.readline().decode('ascii')
                     sleep(.1)
-                    self.ser.write(bytes(self.comSendCommand, 'ascii'))
-                    print(temp, " ", self.comSendCommand) ##DIAG
-                    self.statusMessage.emit(self.com + ' активен, t = ' + temp)
-                    if self.comSendCommand != '1' and self.comSendCommand != '2':
-                        self.ser.reset_output_buffer()
+                    if self.comEnabled:
+                        self.ser.write(bytes(comSendCommand, 'ascii'))
+                        self.queue.put(['message', ttemp + ', write ' + comSendCommand])
+                        if ttemp != temp:
+                            temp = ttemp
+                            self.queue.put(['temp', temp])
+                        if len(ttemp) == 3: 
+                            badCounter = 3
+                            if auto: 
+                                self.queue.put(['command', 'DisableAutoSpeed'])
+                                auto = False
+                            if not comState:
+                                comState = True
+                                self.queue.put(['state', [True, speed]])
+                            if temp != ttemp:
+                                temp = ttemp
+                                self.queue.put(['temp', temp])
+                        elif len(ttemp) > 0 and badCounter > 0:
+                            badCounter -= 1
+                            sleep(.5)
+                            if self.comEnabled: self.ser.reset_input_buffer()
+                            self.queue.put(['message', 'something wrong, read = ' + ttemp + ' remains attempts ' + str(badCounter)])
+                        else: 
+                            self.queue.put(['message', 'something wrong, read = ' + ttemp])
+                            self.ser.close()
+                            if self.comEnabled: self.queue.put(['command',  'autoChangeSpeed'])
+                    if comSendCommand != '1' and comSendCommand != '2':
+                        if self.comEnabled: self.ser.reset_output_buffer()
                         counter += 1
-                        if counter >= 3:
+                        if counter >= 2 and self.comEnabled: ##Количество повторений отправки команд, можно попробовать уменьшить для увеличения скорости отклика, но есть риск непрохождения команды
                             try:
-                                self.comSendCommand = self.comSendCommandQueue.pop(0)
+                                comSendCommand = self.comSendCommandQueue.get_nowait()
+                                if comSendCommand == '1': rebootModem = False
+                                elif comSendCommand == '2': rebootModem = True
                                 counter = 0
                             except:
-                                if not self.needToRebootModem: self.comSendCommand = '1'
-                                else: self.comSendCommand = '2'
+                                if not rebootModem: comSendCommand = '1'
+                                else: comSendCommand = '2'
                     else: 
                         counter = 0
                         try:
-                            self.comSendCommand = self.comSendCommandQueue.pop(0)
+                            comSendCommand = self.comSendCommandQueue.get_nowait()
+                            if comSendCommand == '1': rebootModem = False
+                            elif comSendCommand == '2': rebootModem = True
                         except:
-                            if not self.needToRebootModem: self.comSendCommand = '1'
-                            else: self.comSendCommand = '2'
-                    if len(temp) == 3:
-                        self.autoSpeed = False
-                        if not self.comState:
-                            self.comState = True
-                            self.comStateSignal.emit(True, self.speed)
-                        if temp != self.temp:
-                            self.temp = temp
-                            self.tempChangedSignal.emit(temp)
-                    else: 
-                        print('something wrong, read = ' + temp)
-                        self.ser.close()
-                        self.autoChangeSpeed()
+                            if not rebootModem: comSendCommand = '1'
+                            else: comSendCommand = '2'
             self.ser.close()
-            self.comFinished = True
-            if self.comState: 
-                self.comStateSignal.emit(False, None)
-                self.comState = False
-            self.statusMessage.emit(self.com + ' закрыт')
-            return True
+            if comState: 
+                self.queue.put(['state', [False, None]])
+                comState = False
         except Exception as e: 
-            self.ser.close()
-            self.comFinished = True
-            print(str(e))
-            self.autoChangeSpeed()
+            if str(e) == "Port is already open.": 
+                self.ser.close()
+                if self.comEnabled: self.restart(1)
+            else:
+                self.queue.put(['state', [False, None]])
+                comState = False
+                self.queue.put(['message', str(e)])
+                self.queue.put(['command',  'autoChangeSpeed'])
         
-class MainWindow(QMainWindow, Ui_MainWindow):
+    def __queueHandler(self, q_input):
+        while self.t1enabled:
+            try:
+                msg = q_input.get_nowait()
+                if msg[0] == 'message': print(msg[1])
+                elif msg[0] == 'state': 
+                    self.state['opened'] = msg[1][0]
+                    if self.state['opened']: self.state['speed'] = msg[1][1]
+                elif msg[0] == 'temp': self.state['temp'] = msg[1]
+                elif msg[0] == 'command': 
+                    if msg[1] == 'autoChangeSpeed': self.autoChangeSpeed()
+                    elif msg[1] == 'DisableAutoSpeed': self.autoSpeed = False
+                elif msg[0] == 'sleep': self.state['sleeping'] = msg[1]
+                else: pass
+            except:
+                sleep(.3)
+
+class comStateWatcher(QObject):
+    comStateChanged = pyqtSignal(bool, int)
+    comStateText = pyqtSignal(str)
+    tempChanged = pyqtSignal(str)
+    def __init__(self, com):
+        super(comStateWatcher, self).__init__()
+        self.enabled = True
+        self.state = {'opened':False, 'temp':'', 'sleeping':0}
+    
+    def changeCom(self, com, delay = 0):
+        sleep(delay)
+        self.enabled = False
+        try:
+            while self.t.is_active: sleep(.1)
+        except: pass
+        self.enabled = True
+        self.c = com
+        self.c_name = com.com
+        self.t = threading.Thread(target = self.__mainLoop, args = ())
+        self.t.start()
+        
+    def __mainLoop(self):
+        while self.enabled:
+            try:
+                if self.c.state['sleeping'] != 0: 
+                    print('sleeping')
+                    if self.state['opened']:
+                        self.comStateChanged.emit(False, None)
+                        self.comStateText.emit(self.c.com + " закрыт")
+                        self.state['opened'] = False
+                        self.state['temp'] = ''
+                    self.comStateText.emit(self.c.com + " перезапуск через " + str(self.c.state['sleeping'])  + " сек")
+                else:
+                    if not self.c.state['opened']  and not self.state['opened']: self.comStateText.emit(self.c.com + " открываем")
+                    if self.c.state['opened']  and not self.state['opened']: 
+                        self.comStateChanged.emit(True, self.c.state['speed'])
+                        self.comStateText.emit(self.c.com + " открыт")
+                        self.state['opened'] = self.c.state['opened']
+                    if not self.c.state['opened']  and self.state['opened']: 
+                        self.comStateChanged.emit(False, None)
+                        self.comStateText.emit(self.c.com + " закрыт")
+                        self.state['opened'] = self.c.state['opened']
+                    if self.state['opened']:
+                        if self.c.state['temp'] != self.state['temp']: 
+                            if self.c.state['temp'] != '':
+                                self.state['temp'] = self.c.state['temp']
+                                self.tempChanged.emit(self.state['temp'])
+                            else:
+                                self.comStateText.emit(self.c.com + " не отвечает")
+                sleep(1)
+            except:
+                print('comWatcher ERROR')
+                self.comStateChanged.emit(False, None)
+                self.comStateText.emit(self.c_name + " закрыт")
+                self.enabled = False
+        print('comWatcher STOPPED')
+        return(0)
+
+class MainWindow(QMainWindow, Ui_MainWindow): #class MainWindow(QMainWindow, Ui_MainWindow):
     def __init__(self, parent=None):
         super(MainWindow, self).__init__(parent)
         self.setupUi(self)
         self.log = ""
         self.watchdogEnabled = True
+        self.c = comLoop()
+        self.createComWatcher(self.c)
         self.readConfig()
         try: 
             with open('tmp') as tmp: self.logWrite('Неожиданное выкл-е', 1, tmp.read())
-        except: pass
+        except FileNotFoundError: pass
+        except: self.logWrite('Неожиданное выкл-е', 1, '')
         self.t1 = threading.Thread(target = self.watchdog, args = ())
         self.t1.daemon = True
         self.t1.start()
@@ -229,7 +369,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.needToRebootModem1 = False
         self.needToRebootModem2 = False
         self.needToRebootModem3 = False
-        if self.config.getboolean('comtest', 'enabled') == True:
+        if self.config.getboolean('comtest', 'enabled'):
             self.comState = QLabel(self.centralWidget)
             self.comState.setObjectName("comState")
             self.indicatorsLayout.addWidget(self.comState)
@@ -241,14 +381,9 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             self.sendCommand3.setEnabled(True)  
             self.sendCommand5.setEnabled(True)
             self.comStateChanged('Запускаем ' + self.config['comtest']['port'])
-            try:
-                self.c.settingsChanged(self.config['comtest']['port'], self.config['comtest']['speed'], self.config.getboolean('comtest', 'autoSpeed'))
-            except:
-                self.c = comLoop(self.config['comtest']['port'], self.config['comtest']['speed'], self.config.getboolean('comtest', 'autoSpeed'))
-                self.c.tempChangedSignal.connect(self.tempChanged)
-                self.c.statusMessage.connect(self.comStateChanged)
-                self.c.comStateSignal.connect(self.comStateSlot)
-                self.c.start()
+            print('changing settings of comLoop')
+            self.c.settingsChanged(self.config['comtest']['port'], self.config['comtest']['speed'], self.config.getboolean('comtest', 'autoSpeed'))
+            self.cw.changeCom(self.c, 1)
         else:
             self.restartComAction.setEnabled(False)
             self.restartModemAction.setEnabled(False)
@@ -258,6 +393,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             self.sendCommand3.setEnabled(False)  
             self.sendCommand5.setEnabled(False) 
             try: 
+                self.cw.enabled = False
                 self.c.stop()
             except: pass
         if self.config['iptest']['ip1'] != '':
@@ -287,7 +423,11 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             try: self.p2.stop()
             except: pass
         
-
+    def createComWatcher(self, com):
+        self.cw = comStateWatcher(com)
+        self.cw.tempChanged.connect(self.tempChanged)
+        self.cw.comStateText.connect(self.comStateChanged)
+        self.cw.comStateChanged.connect(self.comStateSlot)
         
     def ipStateChanged(self, ip, state):
         try:
@@ -312,17 +452,14 @@ class MainWindow(QMainWindow, Ui_MainWindow):
     
     def logWrite(self, text, category, time = None):
         self.statusMessage.setText(text)
-        if time == None: dt = datetime.now().strftime('%H:%M:%S %d/%m/%y')
+        if time == None: dt = datetime.now().strftime('%d/%m/%y %H:%M:%S')
         else: dt = time
         with open('log.txt',  'a', newline='') as logfile:
             logwriter = csv.writer(logfile, dialect='unix')
             logwriter.writerow([category, dt, text])
             if self.config['logsettings']['flags'][category] == '1': 
                 self.log += (dt + ' ' + text + '\n')
-                self.textEdit.setPlainText(self.log)
-        self.cur = self.textEdit.textCursor()
-        self.cur.movePosition(QTextCursor.End)
-        self.textEdit.setTextCursor(self.cur)
+        self.__log_refresh()
     
     def logRead(self):
         try: #create empty log if there is no file
@@ -337,28 +474,40 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             self.log = ""
             try:
                 logreader = csv.reader(logfile, dialect = "unix")
+                for row in logreader:
+                    if self.config['logsettings']['flags'][int(row[0])] == '1':
+                        self.log += (row[1] + ' ' + row[2] + '\n')
+                self.__log_refresh()
             except:
+                logfile.close()
                 self.on_createNewLogAction_triggered()
                 self.logWrite('Лог повреждён, начат новый',  1)
-                
-            for row in logreader:
-                if self.config['logsettings']['flags'][int(row[0])] == '1':
-                    self.log += (row[1] + ' ' + row[2] + '\n')
-            self.textEdit.setPlainText(self.log)
-            self.cur = self.textEdit.textCursor()
-            self.cur.movePosition(QTextCursor.End)
-            self.textEdit.setTextCursor(self.cur)
+                with open('log.txt', newline = '') as logfile: #read log
+                    self.log = ""
+                    self.log += (datetime.now().strftime('%d/%m/%y %H:%M:%S') + ' Лог повреждён, начат новый' + '\n')
+    
+    def __log_refresh(self):
+        self.textEdit.setPlainText(self.log)
+        self.cur = self.textEdit.textCursor()
+        self.cur.movePosition(QTextCursor.End)
+        self.textEdit.setTextCursor(self.cur)
         
+    
     def watchdog(self):
+        sleeping = 0
         while self.watchdogEnabled:
-            tmpfile = open('tmp', 'w')
-            tmpfile.write(datetime.now().strftime('%H:%M:%S %d/%m/%y'))
-            tmpfile.close()
-            self.statusMessage.setText(datetime.now().strftime('%H:%M %d/%m') + ' контроль активен')
-            try: 
-                if self.c.needToRebootModem: self.statusMessage.setText(datetime.now().strftime('%H:%M %d/%m') + ' ждём перезагрузки модема')
-            except: pass
-            sleep(60)
+            if not sleeping:
+                tmpfile = open('tmp', 'w')
+                tmpfile.write(datetime.now().strftime('%d/%m/%y %H:%M:%S'))
+                tmpfile.close()
+                self.statusMessage.setText(datetime.now().strftime('%H:%M %d/%m') + ' контроль активен')
+                try:
+                    if self.c.needToRebootModem: self.statusMessage.setText(datetime.now().strftime('%H:%M %d/%m') + ' ждём перезагрузки модема')
+                except: pass
+                finally: sleeping = 15
+            else:
+                sleeping -= 1
+                sleep(1)
             
     def comStateChanged(self, text):
         self.comState.setText(text)
@@ -366,14 +515,19 @@ class MainWindow(QMainWindow, Ui_MainWindow):
     def tempChanged(self, temp):
         self.comState.setText(self.c.com + ' активен, t = ' + temp)
         self.statusMessage.setText(datetime.now().strftime('%H:%M:%S %d/%m') + ' t = ' + temp)
-        self.logWrite(('t = ' + temp), 5)
-        if int(temp[1:]) >= int(self.config['comtest']['maxtemp']): 
-            self.logWrite('ПРЕВЫШЕНИЕ КРИТ. ТЕМПЕРАТУРЫ', 4)
-            self.c.sendCommand('4')
+        if len(temp) == 3: 
+            self.logWrite(('t = ' + str(temp)), 5)
+            if int(temp[1:]) >= int(self.config['comtest']['maxtemp']): 
+                self.logWrite('ПРЕВЫШЕНИЕ КРИТ. ТЕМПЕРАТУРЫ', 4)
+                self.c.sendCommand('4')
         
     def comStateSlot(self, state, speed = None):
-        if state: self.logWrite((self.c.com + ' активен'), 4)
-        else: self.logWrite((self.c.com + ' неактивен'), 4)
+        com = str(self.c.com)
+        if state: 
+            self.logWrite(com + ' активен', 4)
+        else: 
+            self.logWrite(com + ' неактивен', 4)
+            self.comState.setText(com + ' неактивен')
         if state and speed != None:
             if speed == 1200 or speed == 9600:
                 if str(speed) != self.config['comtest']['speed']:
@@ -381,10 +535,21 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                     configfile = open('settings.ini', 'w')
                     self.config.write(configfile)
                     configfile.close()
-                    self.logWrite((self.c.com + ' скорость: '+ str(speed)), 4)
+                    self.logWrite((com + ' скорость: '+ str(speed)), 4)
 
     @pyqtSlot()
     def closeEvent(self, event):
+        if self.config.getboolean('comtest', 'enabled'):
+            try:
+                if self.c.state['opened']:
+                    self.comState.setText("Завершение работы...")
+                    print('try to stop, send 6')
+                    self.c.sendCommand('6')
+                    self.cw.comStateText.disconnect()
+                    sleep(6)
+                self.c.stop()
+                self.c.t1enabled = False
+            except: pass
         try: os.remove('tmp')
         except: pass
         self.logWrite('Выключение', 1)
@@ -393,11 +558,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         try: self.p2.stop()
         except: pass
         self.watchdogEnabled = False
-        if self.config.getboolean('comtest', 'enabled'):
-            self.c.sendCommand('6')
-            sleep(4)
-        try: self.c.stop()
-        except: pass
+        self.cw.enabled = False
         event.accept()
     
     @pyqtSlot()
@@ -427,11 +588,11 @@ class MainWindow(QMainWindow, Ui_MainWindow):
     def on_restartComAction_triggered(self):
         if self.config.getboolean('comtest', 'enabled'): 
             self.t = threading.Thread(target = self.__restartCom, args = ())
-            self.t.daemon = True
             self.t.start()
     
     def __restartCom(self):
         self.c.restart(5)
+        self.cw.changeCom(self.c, 1)
         
     
     @pyqtSlot()
@@ -455,6 +616,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
     def on_clearLogAction_triggered(self):
         acq = QMessageBox.question(self, 'Запрос', 'Лог будет очищен. Вы уверены?', QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if acq == QMessageBox.Yes:
+            self.log = ''
             self.textEdit.setPlainText('')
             with open('log.txt', 'w') as log: log.write('')
     
@@ -483,13 +645,47 @@ class MainWindow(QMainWindow, Ui_MainWindow):
     def on_createNewLogAction_triggered(self):
         self.log = ""
         self.textEdit.setPlainText('')
-        with open('log.txt') as log:
-            logcontent = log.read()
         date = datetime.now().strftime('%d-%m-%y_%H-%M-%S')
         filename = "log-" + date + ".txt"
-        with open(filename, 'w') as newlog: newlog.write(logcontent)
-        with open('log.txt', 'w') as log: log.write('')
+        os.rename('log.txt', filename)
+        with open('log.txt', 'x') as log: log.write('')
     
     @pyqtSlot()
     def on_programInfoAction_triggered(self):
-        QMessageBox.information(self, 'О программе', 'Версия 1.1 (26.02.2018)', QMessageBox.Ok | QMessageBox.NoButton | QMessageBox.NoButton, QMessageBox.Ok)
+        QMessageBox.information(self, 'О программе', 'Версия 1.4 (27.11.2018)', QMessageBox.Ok | QMessageBox.NoButton | QMessageBox.NoButton, QMessageBox.Ok)
+    
+    def __com_watcher(self): ## Весь метод будет задействован после перехода на Tk
+        state = {'opened':False, 'temp':'', 'sleeping':0}
+        while self.watchdogEnabled:
+            try:
+                if self.c.state['sleeping'] != 0: 
+                    print('sleeping')
+                    if state['opened']:
+                        self.comStateSlot(False)
+                        self.comState.setText(self.c.com + " закрыт")
+                        state['opened'] = False
+                        state['temp'] = ''
+                    self.comState.setText(self.c.com + " перезапуск через " + str(self.c.state['sleeping'])  + " сек")
+                else:
+                    if self.c.state['opened']  and not state['opened']: 
+                        self.comStateSlot(True, self.c.state['speed'])
+                        self.comState.setText(self.c.com + " открыт")
+                        state['opened'] = self.c.state['opened']
+                        self.tempChanged(self.c.state['temp'])
+                    if not self.c.state['opened']  and state['opened']: 
+                        self.comStateSlot(False)
+                        self.comState.setText(self.c.com + " закрыт")
+                        state['opened'] = self.c.state['opened']
+                    if state['opened']:
+                        if self.c.state['temp'] != state['temp']: 
+                            if self.c.state['temp'] != '':
+                                state['temp'] = self.c.state['temp']
+                                self.tempChanged(state['temp'])
+                            else:
+                                self.comStateSlot(False)
+                                state['opened'] = False
+                                self.comState.setText(self.c.com + " не отвечает")
+                sleep(1)
+            except:
+                sleep(1)
+
