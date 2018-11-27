@@ -10,7 +10,11 @@ from time import sleep
 import configparser
 import csv
 import os
+import sys
 import serial
+import subprocess
+import signal
+import platform
 import tkinter.ttk as ttk
 import threading, queue, tkinter
 from tkinter import messagebox
@@ -276,14 +280,14 @@ class MainWindow():
         self.w.other_commands.entryconfig('5', command = self.on_sendCommand5_triggered)
         self.w.more.entryconfig('Setup', command = self.on_settingsAction_triggered)
         self.w.more.entryconfig('New log', command = self.on_createNewLogAction_triggered)
-        self.w.more.entryconfig('Clear current log', command = self.on_clearLogAction_triggered)
         self.messages = queue.Queue()
         self.watchdogEnabled = True
         self.c = comLoop()
         self.readConfig()
         try: 
-            with open('tmp') as tmp: self.logWrite('Abnormal shutdown', 1, tmp.read())
-        except: pass
+            with open('tmp') as tmp: self.logWrite('Shutdown', 1, tmp.read())
+        except:
+            self.logWrite('Shutdown', 1, '')
         self.t1 = threading.Thread(target = self.watchdog, args = ())
         self.t1.daemon = True
         self.t1.start()
@@ -404,7 +408,8 @@ class MainWindow():
                     if not state and self.config.getboolean('modemsettings', 'ip2'): self.needToRebootModem2 = True
                     if state: self.needToRebootModem2 = False
         except: pass
-        if self.config.getboolean('comtest', 'enabled') == True: self.c.needToRebootModem = bool(self.needToRebootModem1 + self.needToRebootModem2 + self.needToRebootModem3)
+        if self.config.getboolean('comtest', 'enabled') == True: 
+            self.c.needToRebootModem = bool(self.needToRebootModem1 + self.needToRebootModem2 + self.needToRebootModem3)
         if state: text = ip + ' avialible'
         else: text = ip + ' unavialible'
         if ip == self.ip1:
@@ -415,7 +420,7 @@ class MainWindow():
     
     def logWrite(self, text, category, time = None):
         self.statusMessage.set(text)
-        if time == None: dt = datetime.now().strftime('%H:%M:%S %d/%m/%y')
+        if time == None: dt = datetime.now().strftime('%d/%m/%y %H:%M:%S')
         else: dt = time
         with open('log.txt',  'a', newline='') as logfile:
             logwriter = csv.writer(logfile, dialect='unix')
@@ -437,25 +442,41 @@ class MainWindow():
             self.w.Scrolledtext1.delete(1.0, tkinter.END)
             try:
                 logreader = csv.reader(logfile, dialect = "unix")
+                for row in logreader:
+                    if self.config['logsettings']['flags'][int(row[0])] == '1':
+                        self.w.Scrolledtext1.insert(tkinter.END, (row[1] + ' ' + row[2] + '\n'))
+                        self.w.Scrolledtext1.see(tkinter.END)
             except:
+                logfile.close()
                 self.on_createNewLogAction_triggered()
                 self.logWrite('Log is damaged, started new one',  1)
-                logreader = csv.reader(logfile, dialect = "unix")
-            for row in logreader:
-                if self.config['logsettings']['flags'][int(row[0])] == '1':
-                    self.w.Scrolledtext1.insert(tkinter.END, (row[1] + ' ' + row[2] + '\n'))
-                    self.w.Scrolledtext1.see(tkinter.END)
-    
+                with open('log.txt', newline = '') as logfile: #read log
+                    self.w.Scrolledtext1.delete(1.0, tkinter.END)
+                    logreader = csv.reader(logfile, dialect = "unix")
+            
     def watchdog(self):
+        sleeping = 0
         while self.watchdogEnabled:
-            tmpfile = open('tmp', 'w')
-            tmpfile.write(datetime.now().strftime('%H:%M:%S %d/%m/%y'))
-            tmpfile.close()
-            self.statusMessage.set(datetime.now().strftime('%H:%M %d/%m') + ' controlling...')
-            try: 
-                if self.c.needToRebootModem: self.statusMessage.set(datetime.now().strftime('%H:%M %d/%m') + ' waiting for modem reboot...')
-            except: pass
-            sleep(15)
+##            if platform.system().lower() == "windows":
+##                p = subprocess.Popen('tasklist /fo csv /nh /fi "imagename eq shutdown.exe -a"', stdout = subprocess.PIPE, shell = True) # костыль адовый, и мне дико не нравится, но не знаю, как сделать лучше
+##                lines = []
+##                for i in p.stdout:
+##                    lines.append(str(i, 'cp866'))
+##                for i in lines:
+##                    if i[:9] == '"shutdown':
+##                        self.closeEvent(shutdown = True)
+            if not sleeping:
+                tmpfile = open('tmp', 'w')
+                tmpfile.write(datetime.now().strftime('%d/%m/%y %H:%M:%S'))
+                tmpfile.close()
+                self.statusMessage.set(datetime.now().strftime('%H:%M %d/%m') + ' controlling...')
+                try:
+                    if self.c.needToRebootModem: self.statusMessage.set(datetime.now().strftime('%H:%M %d/%m') + ' waiting for modem reboot...')
+                except: pass
+                sleeping = 60
+            else:
+                sleeping -= 1
+                sleep(.25)
             
     def comStateChanged(self, text):
         self.comState.set(text)
@@ -485,26 +506,33 @@ class MainWindow():
                     configfile.close()
                     self.logWrite((com + ' speed: '+ str(speed)), 4)
 
-    def closeEvent(self):
+    def closeEvent(self, shutdown = False, *args):
+##        if platform.system().lower() == "windows" and shutdown:
+##            subprocess.Popen("shutdown -a", stdout = subprocess.DEVNULL, shell = True)
+##            print("shutdown paused!!!")
+        self.watchdogEnabled = False
+        try: os.remove('tmp')
+        except: pass
+        self.logWrite('App closed', 1)
         if self.config.getboolean('comtest', 'enabled'):
             try:
                 if self.c.state['opened']:
-                    self.w.TLabel1.configure(text = "Processing shutdown...") ##Не работает, ну и ладно
+                    self.w.TLabel1.configure(text = "Processing exit...") ##Не работает, ну и ладно
                     print('try to stop, send 6')
                     self.c.sendCommand('6')
                     sleep(6)
                 self.c.stop()
                 self.c.t1enabled = False
             except: pass
-        try: os.remove('tmp')
-        except: pass
-        self.logWrite('Shutdown', 1)
         try: self.p1.stop()
         except: pass
         try: self.p2.stop()
         except: pass
-        self.watchdogEnabled = False
-        root.destroy()
+##        if platform.system().lower() == "windows" and shutdown:
+##            print("Resume shutdown!!!")
+##            subprocess.Popen("shutdown -s" , stdout = subprocess.DEVNULL, shell = True)
+        root.quit()
+        sys.exit(0)
     
     def on_settingsAction_triggered(self):
         self.setWin = tk_settingsForm.create_New_Toplevel(root)[1]
@@ -578,11 +606,6 @@ class MainWindow():
     def on_enableCommandsAction_triggered(self):
         if self.config.getboolean('comtest', 'enabled'): self.c.sendCommand('7')
     
-    def on_clearLogAction_triggered(self):
-        if messagebox.askyesno('Query', 'Log would be cleaned, all information would be deleted. Are you sure?'):
-            self.w.Scrolledtext1.delete(1.0, tkinter.END)
-            with open('log.txt', 'w') as log: log.write('')
-    
     def on_sendCommand3_triggered(self):
         if self.config.getboolean('comtest', 'enabled'): self.c.sendCommand('3')
     
@@ -605,13 +628,12 @@ class MainWindow():
     
     def on_createNewLogAction_triggered(self):
         self.w.Scrolledtext1.delete(1.0, tkinter.END)
-        self.textEdit.setPlainText('')
         date = datetime.now().strftime('%d-%m-%y_%H-%M-%S')
         filename = "log-" + date + ".txt"
         os.rename('log.txt', filename)
         with open('log.txt', 'x') as log: log.write('')
 
-    def __com_watcher(self): ## Весь метод будет задействован после перехода на Tk
+    def __com_watcher(self):
         state = {'opened':False, 'temp':'', 'sleeping':0}
         while self.watchdogEnabled:
             self.w.TLabel1.configure(text = self.statusMessage)

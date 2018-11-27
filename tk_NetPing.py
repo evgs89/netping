@@ -171,14 +171,7 @@ class New_Toplevel:
                 background="#d9d9d9",
                 font="TkMenuFont",
                 foreground="#000000",
-                label="Clear current log")
-        self.more.add_command(
-                activebackground="#d8d8d8",
-                activeforeground="#000000",
-                background="#d9d9d9",
-                font="TkMenuFont",
-                foreground="#000000",
-                label="About: v 2.0 (01052018)")
+                label="About: v 2.0 (08112018)")
 
         self.frame1 = Frame(top, bg = "#d9d9d9",bd = 1)
         self.frame1.pack(side = 'top', fill = 'x')
