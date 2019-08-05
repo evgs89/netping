@@ -271,7 +271,6 @@ class comStateWatcher(QObject):
         self.c = com
         self.c_name = com.com
         self.t = threading.Thread(target = self.__mainLoop, args = ())
-        #self.t.daemon = True
         self.t.start()
         
     def __mainLoop(self):
@@ -322,13 +321,11 @@ class MainWindow(QMainWindow, Ui_MainWindow): #class MainWindow(QMainWindow, Ui_
         self.readConfig()
         try: 
             with open('tmp') as tmp: self.logWrite('Неожиданное выкл-е', 1, tmp.read())
-        except: pass
+        except FileNotFoundError: pass
+        except: self.logWrite('Неожиданное выкл-е', 1, '')
         self.t1 = threading.Thread(target = self.watchdog, args = ())
         self.t1.daemon = True
         self.t1.start()
-#        self.comStateChanged.connect(self.comStateSlot)
-#        self.t2 = threading.Thread(target = self.__com_watcher, args = ()) ## Будет работать только без Qt
-#        self.t2.start()
         self.logWrite('Запуск', 0)
     
 
@@ -477,15 +474,17 @@ class MainWindow(QMainWindow, Ui_MainWindow): #class MainWindow(QMainWindow, Ui_
             self.log = ""
             try:
                 logreader = csv.reader(logfile, dialect = "unix")
+                for row in logreader:
+                    if self.config['logsettings']['flags'][int(row[0])] == '1':
+                        self.log += (row[1] + ' ' + row[2] + '\n')
+                self.__log_refresh()
             except:
+                logfile.close()
                 self.on_createNewLogAction_triggered()
                 self.logWrite('Лог повреждён, начат новый',  1)
-                logreader = csv.reader(logfile, dialect = "unix")
-            for row in logreader:
-                if self.config['logsettings']['flags'][int(row[0])] == '1':
-                    self.log += (row[1] + ' ' + row[2] + '\n')
-            self.__log_refresh()
-            
+                with open('log.txt', newline = '') as logfile: #read log
+                    self.log = ""
+                    self.log += (datetime.now().strftime('%d/%m/%y %H:%M:%S') + ' Лог повреждён, начат новый' + '\n')
     
     def __log_refresh(self):
         self.textEdit.setPlainText(self.log)
@@ -495,15 +494,20 @@ class MainWindow(QMainWindow, Ui_MainWindow): #class MainWindow(QMainWindow, Ui_
         
     
     def watchdog(self):
+        sleeping = 0
         while self.watchdogEnabled:
-            tmpfile = open('tmp', 'w')
-            tmpfile.write(datetime.now().strftime('%d/%m/%y %H:%M:%S'))
-            tmpfile.close()
-            self.statusMessage.setText(datetime.now().strftime('%H:%M %d/%m') + ' контроль активен')
-            try: 
-                if self.c.needToRebootModem: self.statusMessage.setText(datetime.now().strftime('%H:%M %d/%m') + ' ждём перезагрузки модема')
-            except: pass
-            sleep(15)
+            if not sleeping:
+                tmpfile = open('tmp', 'w')
+                tmpfile.write(datetime.now().strftime('%d/%m/%y %H:%M:%S'))
+                tmpfile.close()
+                self.statusMessage.setText(datetime.now().strftime('%H:%M %d/%m') + ' контроль активен')
+                try:
+                    if self.c.needToRebootModem: self.statusMessage.setText(datetime.now().strftime('%H:%M %d/%m') + ' ждём перезагрузки модема')
+                except: pass
+                finally: sleeping = 15
+            else:
+                sleeping -= 1
+                sleep(1)
             
     def comStateChanged(self, text):
         self.comState.setText(text)
@@ -648,7 +652,7 @@ class MainWindow(QMainWindow, Ui_MainWindow): #class MainWindow(QMainWindow, Ui_
     
     @pyqtSlot()
     def on_programInfoAction_triggered(self):
-        QMessageBox.information(self, 'О программе', 'Версия 1.3.1 (15.06.2018)', QMessageBox.Ok | QMessageBox.NoButton | QMessageBox.NoButton, QMessageBox.Ok)
+        QMessageBox.information(self, 'О программе', 'Версия 1.4 (27.11.2018)', QMessageBox.Ok | QMessageBox.NoButton | QMessageBox.NoButton, QMessageBox.Ok)
     
     def __com_watcher(self): ## Весь метод будет задействован после перехода на Tk
         state = {'opened':False, 'temp':'', 'sleeping':0}
