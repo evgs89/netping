@@ -34,10 +34,10 @@ from .Ui_netPing import Ui_MainWindow
 
 """
 
-class comLoop:
-    
+
+class ComLoop:
     def __init__(self):
-        super(comLoop, self).__init__()
+        super(ComLoop, self).__init__()
         self.com = None
         self.speed = None
         self.needToRebootModem = False
@@ -46,22 +46,23 @@ class comLoop:
         self.restarting = False
         self.comSendCommandQueue = queue.Queue()
         self.comEnabled = False
-        self.state = {'opened':False, 'temp':'', 'sleeping':0, 'speed':self.speed}
+        self.state = {'opened': False, 'temp': '', 'sleeping': 0, 'speed': self.speed}
         self.queue = queue.Queue()
         self.t1enabled = True
-        self.t1 = threading.Thread(target = self.__queueHandler, args = (self.queue,))
-        #self.t1.daemon = True
+        self.t1 = threading.Thread(target=self.__queueHandler, args=(self.queue,))
         self.t1.start()
     
-    def start(self, delay = 0):
-        if not self.needToRebootModem: self.comSendCommandQueue.put('1')
-        else: self.comSendCommandQueue.put('2')
+    def start(self, delay=0):
+        if not self.needToRebootModem:
+            self.comSendCommandQueue.put('1')
+        else:
+            self.comSendCommandQueue.put('2')
         self.comEnabled = True
-        self.t = threading.Thread(target = self.__comLoop, args = (delay, )) #, self.com, self.speed, self.autoSpeed))
+        self.t = threading.Thread(target=self.__comLoop, args=(delay, ))
         self.t.start()
         return(0)
     
-    def settingsChanged(self, com, speed, auto = True):
+    def settingsChanged(self, com, speed, auto=True):
         try:
             if self.ser.port != com or self.speed != speed or auto != self.autoSpeed:
                 if self.stop() == 0:
@@ -88,16 +89,21 @@ class comLoop:
                 self.autoSpeed = False
                 self.start(0)
     
-    def restart(self, delay = 10):
+    def _clear_com_send_command_queue(self):
+        while not self.comSendCommandQueue.empty():
+            self.comSendCommandQueue.get_nowait()
+
+    def restart(self, delay=10):
+        self._clear_com_send_command_queue()
         if not self.restarting:
             self.restarting = True
             print('restarting COM, delay = ' + str(delay))
             if self.stop() == 0: 
-                self.state = {'opened':False, 'temp':'', 'sleeping':delay, 'speed':self.speed}
+                self.state = {'opened': False, 'temp': '', 'sleeping': delay, 'speed': self.speed}
                 print('com restart, delay = ' + str(delay))
                 self.start(delay)
     
-    def autoChangeSpeed(self): 
+    def auto_change_speed(self):
         print('autoChange counter = ' + str(self.autoChangeSpeedCounter))
         if self.autoChangeSpeedCounter > 0 and self.autoSpeed and self.comEnabled: 
             print(self.speed)
@@ -109,7 +115,7 @@ class comLoop:
             print('speed changed,now ' + str(self.speed))
             self.restart(2)
             return True
-        elif self.autoSpeed == False and self.comEnabled:
+        elif not self.autoSpeed and self.comEnabled:
             print('possibly wrong speed, auto disabled')
             self.restart(2)
             return False
@@ -140,7 +146,7 @@ class comLoop:
         self.comSendCommandQueue.put(command)
     
     def __comLoop(self, delay): #, com, speed, auto): #queue, commandQueue,, comEnabled
-        self.queue.put(['message', 'comLoop started'])
+        self.queue.put(['message', 'ComLoop started'])
         com = self.com
         speed = self.speed
         auto = self.autoSpeed
@@ -203,7 +209,9 @@ class comLoop:
                     if comSendCommand != '1' and comSendCommand != '2':
                         if self.comEnabled: self.ser.reset_output_buffer()
                         counter += 1
-                        if counter >= 2 and self.comEnabled: ##Количество повторений отправки команд, можно попробовать уменьшить для увеличения скорости отклика, но есть риск непрохождения команды
+                        if counter >= 2 and self.comEnabled:
+                        # Количество повторений отправки команд, можно попробовать уменьшить для увеличения
+                        # скорости отклика, но есть риск непрохождения команды
                             try:
                                 comSendCommand = self.comSendCommandQueue.get_nowait()
                                 if comSendCommand == '1': rebootModem = False
@@ -245,7 +253,7 @@ class comLoop:
                     if self.state['opened']: self.state['speed'] = msg[1][1]
                 elif msg[0] == 'temp': self.state['temp'] = msg[1]
                 elif msg[0] == 'command': 
-                    if msg[1] == 'autoChangeSpeed': self.autoChangeSpeed()
+                    if msg[1] == 'autoChangeSpeed': self.auto_change_speed()
                     elif msg[1] == 'DisableAutoSpeed': self.autoSpeed = False
                 elif msg[0] == 'sleep': self.state['sleeping'] = msg[1]
                 else: pass
@@ -259,7 +267,7 @@ class comStateWatcher(QObject):
     def __init__(self, com):
         super(comStateWatcher, self).__init__()
         self.enabled = True
-        self.state = {'opened':False, 'temp':'', 'sleeping':0}
+        self.state = {'opened': False, 'temp': '', 'sleeping': 0}
     
     def changeCom(self, com, delay = 0):
         sleep(delay)
@@ -316,7 +324,7 @@ class MainWindow(QMainWindow, Ui_MainWindow): #class MainWindow(QMainWindow, Ui_
         self.setupUi(self)
         self.log = ""
         self.watchdogEnabled = True
-        self.c = comLoop()
+        self.c = ComLoop()
         self.createComWatcher(self.c)
         self.readConfig()
         try: 
@@ -381,7 +389,7 @@ class MainWindow(QMainWindow, Ui_MainWindow): #class MainWindow(QMainWindow, Ui_
             self.sendCommand3.setEnabled(True)  
             self.sendCommand5.setEnabled(True)
             self.comStateChanged('Запускаем ' + self.config['comtest']['port'])
-            print('changing settings of comLoop')
+            print('changing settings of ComLoop')
             self.c.settingsChanged(self.config['comtest']['port'], self.config['comtest']['speed'], self.config.getboolean('comtest', 'autoSpeed'))
             self.cw.changeCom(self.c, 1)
         else:
@@ -462,11 +470,11 @@ class MainWindow(QMainWindow, Ui_MainWindow): #class MainWindow(QMainWindow, Ui_
         self.__log_refresh()
     
     def logRead(self):
-        try: #create empty log if there is no file
+        try:
             a = open('log.txt', 'x')
             a.write('')
             a.close()
-        except: 
+        except FileExistsError:
             if os.path.getsize('log.txt') > int(self.config['logsettings']['maxlogsize']):
                 self.on_createNewLogAction_triggered()
                 self.logWrite('Лог слишком большой, начат новый',  1)
